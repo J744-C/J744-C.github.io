@@ -150,9 +150,19 @@ td.pos{font-size:1.2rem}td.pts{font:700 1.15rem Cinzel;color:var(--gold)}td.name
 @keyframes glow{50%{filter:drop-shadow(0 0 28px #d4af37aa)}}
 .hero h1{font-size:clamp(1.9rem,6vw,3.2rem);letter-spacing:2px;text-transform:uppercase;background:linear-gradient(135deg,#fff2b0,#d4af37 45%,#a8791a);-webkit-background-clip:text;background-clip:text;color:transparent}
 .hero p{color:var(--silver);margin-top:6px;font-size:.95rem}
+body.locked{overflow:hidden}
+#auth{position:fixed;inset:0;z-index:100;display:none;place-items:center;padding:16px;overflow:auto;background:radial-gradient(700px 400px at 50% 0,#7b142855,transparent),var(--bg)}
+body.locked #auth{display:grid}
+.authbox{width:100%;max-width:440px;background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--burg);border-radius:16px;padding:24px;box-shadow:0 10px 40px #000a;animation:fadeIn .5s ease}
+.authbox .alogo{width:110px;height:110px;display:block;margin:0 auto 8px;filter:drop-shadow(0 0 18px #a51e3caa)}
+.authbox h1{text-align:center;font-size:2rem;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;background:linear-gradient(135deg,#fff2b0,#d4af37 45%,#a8791a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.authbox .mtabs{margin-top:4px}
+.authbox pre{background:#0b0b0b;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:.72rem;overflow:auto;color:var(--silver);margin:6px 0}
+.authbox ol{padding-left:18px;font-size:.85rem;color:var(--silver);line-height:1.55}
+#syncState{font-size:.75rem;color:var(--muted);white-space:nowrap;margin:0 6px}
 </style>
 </head>
-<body>
+<body class="locked">
 <!-- ===== LOGO SVG: balón de estrellas (starball) en bordó, dorado y plata ===== -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
   <defs>
@@ -190,7 +200,46 @@ td.pos{font-size:1.2rem}td.pts{font:700 1.15rem Cinzel;color:var(--gold)}td.name
   <button data-view="galeria">Galería de Jugadores</button>
   <button data-view="juegos">Juegos</button>
   <button data-view="analisis">Análisis Avanzado</button>
+  <span style="flex:1"></span><span id="syncState"></span>
+  <button id="logoutBtn" type="button">Salir</button>
 </nav>
+
+<!-- ===== PANTALLA DE ACCESO (usuario y contraseña) ===== -->
+<div id="auth"><div class="authbox">
+  <svg class="alogo" viewBox="0 0 120 120" role="img" aria-label="Logo Champions Gamer"><use href="#cgLogo"/></svg>
+  <h1>Champions Gamer</h1>
+  <div id="setupBox" style="display:none">
+    <p style="font-size:.9rem;margin-bottom:8px">Falta conectar la base de datos en la nube (gratis). Solo se hace una vez:</p>
+    <ol>
+      <li>Entra a <b>supabase.com</b> y crea un proyecto.</li>
+      <li><b>SQL Editor</b> → New query → pega esto y pulsa Run:
+<pre>create table public.app_items (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null check (kind in ('players','games','matches')),
+  id text not null,
+  data jsonb not null,
+  seq bigint generated always as identity,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, kind, id)
+);
+alter table public.app_items enable row level security;
+create policy "solo el dueno" on public.app_items
+  for all to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);</pre></li>
+      <li><b>Authentication</b> → Sign In / Providers → <b>Email</b>: desactiva <b>Confirm email</b> (la app usa nombre de usuario, no un correo real).</li>
+      <li><b>Project Settings → API</b>: copia <b>Project URL</b> y la clave <b>anon public</b>.</li>
+      <li>Pégalos en la constante <b>SUPABASE</b> al inicio de la sección "Cuentas" del &lt;script&gt; y recarga.</li>
+    </ol>
+  </div>
+  <div id="loginBox">
+    <div class="mtabs"><button id="tabLogin" type="button">Ingresar</button><button id="tabReg" class="off" type="button">Crear cuenta</button></div>
+    <label for="aUser">Usuario</label><input id="aUser" autocomplete="username" maxlength="20" autocapitalize="none">
+    <label for="aPass">Contraseña</label><input id="aPass" type="password" autocomplete="current-password">
+    <div id="regRow" style="display:none"><label for="aPass2">Repetir contraseña</label><input id="aPass2" type="password" autocomplete="new-password"></div>
+    <button class="full" id="authBtn" type="button">Ingresar</button><div class="msg" id="authMsg"></div>
+  </div>
+</div></div>
 
 <!-- ===== VISTA: RANKING ===== -->
 <section class="view active" id="v-global">
@@ -296,23 +345,53 @@ td.pos{font-size:1.2rem}td.pts{font:700 1.15rem Cinzel;color:var(--gold)}td.name
   <div id="analysis"></div>
 </div></section>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-/* ===== 1. ESTADO Y PERSISTENCIA =====
-   state = {
-     players:[{id, name, photo, desc, favs, prime(gameId), discord, socials, song(enlace de YouTube), skills:[{id, name, value}]}],
-     games:[{id, name, cover, metrics:[{id,name}]}],
-     matches:[{id, game, p1, p2, result:'p1'|'p2'|'draw', ts, notes, m:{p1:{metricId:n}, p2:{metricId:n}}}]
-   } */
-const KEY = 'ranking-multijuego-v8';
-const ICONS = ['🏆','👟','🧤','⚔️','🔥','💎','⚡','🎯','🛡️','⭐'];
-let state = load();
+// Credenciales corregidas de Supabase
+const SUPABASE_URL = 'https://alrfgpmnuncurigdkumi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFscmZncG1udW5jdXJpZ2RrdW1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1OTU4MTQsImV4cCI6MjEwNzE3MTgxNH0.MYVAEc2kPhZ-4tdauRR6LERDC46LvN4SFUyBa6jG9ww';
 
-function load(){
-  try{ const s = JSON.parse(localStorage.getItem(KEY)); if(s && s.players && s.games && s.matches) return s; }catch(e){}
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ===== 1. ESTADO Y PERSISTENCIA ===== */
+const ICONS = ['🏆','👟','🧤','⚔️','🔥','💎','⚡','🎯','🛡️','⭐'];
+let state = {players:[], games:[], matches:[]};   
+
+function defaultState(){
   const mk = (name, mets) => ({id:uid(), name, cover:'', metrics:mets.map(n => ({id:uid(), name:n}))});
   return {players:[], matches:[], games:[mk('FIFA 18',['Goles','Atajadas']), mk('PES',['Goles']), mk('League of Legends',['Kills','Asistencias']), mk('Smash Bros',['Kills'])]};
 }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){ alert('Almacenamiento lleno: usa URLs en lugar de imágenes subidas.'); } }
+
+let dirty = false, flushT = null, authMode = 'login';
+function setSync(t){ $('syncState').textContent = t; }
+
+// Guardar en Supabase automáticamente cuando hay cambios
+function save(){ 
+  dirty = true; 
+  setSync('Guardando…'); 
+  clearTimeout(flushT); 
+  flushT = setTimeout(flushToSupabase, 500); 
+}
+
+async function flushToSupabase() {
+  const user = (await supabase.auth.getUser()).data.user;
+  if (!user) return;
+
+  // Guardar jugadores
+  for (const p of state.players) {
+    await supabase.from('app_items').upsert({ user_id: user.id, kind: 'players', id: p.id, data: p });
+  }
+  // Guardar juegos
+  for (const g of state.games) {
+    await supabase.from('app_items').upsert({ user_id: user.id, kind: 'games', id: g.id, data: g });
+  }
+  // Guardar partidas
+  for (const m of state.matches) {
+    await supabase.from('app_items').upsert({ user_id: user.id, kind: 'matches', id: m.id, data: m });
+  }
+  setSync('☁ Sincronizado');
+}
+
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -320,7 +399,7 @@ const player = id => state.players.find(p => p.id === id);
 const game = id => state.games.find(g => g.id === id);
 const nameOf = id => (player(id) || {name:'(eliminado)'}).name;
 
-/* ===== 2. IMÁGENES (Canvas -> Base64 redimensionado) ===== */
+/* ===== 2. IMÁGENES ===== */
 function fileToDataURL(file, maxW, maxH){
   return new Promise((resolve, reject) => {
     const r = new FileReader(); r.onerror = reject;
@@ -342,7 +421,81 @@ const bg = src => src ? `background-image:url("${src.replace(/"/g,'%22')}")` : '
 const initials = n => esc(n.trim().slice(0,2).toUpperCase());
 const avatar = p => `<div class="av" style="${esc(bg(p.photo))}">${p.photo ? '' : initials(p.name)}</div>`;
 
-/* ===== 3. CÁLCULO: tabla, métricas acumuladas y líderes ===== */
+/* ===== 3. AUTENTICACIÓN ===== */
+async function manejarAuth() {
+  const usuario = $('aUser').value.trim();
+  const password = $('aPass').value;
+  const msg = $('authMsg');
+
+  if (!usuario || !password) {
+    msg.textContent = 'Completa todos los campos.';
+    msg.className = 'msg err';
+    return;
+  }
+
+  const emailFicticio = `${usuario.toLowerCase()}@champions.local`;
+
+  if (authMode === 'register') {
+    const password2 = $('aPass2').value;
+    if (password !== password2) {
+      msg.textContent = 'Las contraseñas no coinciden.';
+      msg.className = 'msg err';
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signUp({ email: emailFicticio, password: password });
+    if (error) {
+      msg.textContent = 'Error: ' + error.message;
+      msg.className = 'msg err';
+    } else {
+      msg.textContent = '¡Cuenta creada! Ya puedes ingresar.';
+      msg.className = 'msg';
+      setAuthMode('login');
+    }
+  } else {
+    const { data, error } = await supabase.auth.signInWithPassword({ email: emailFicticio, password: password });
+    if (error) {
+      msg.textContent = 'Usuario o contraseña incorrectos.';
+      msg.className = 'msg err';
+    } else {
+      iniciarSesionExitosa();
+    }
+  }
+}
+
+async function iniciarSesionExitosa() {
+  document.body.classList.remove('locked');
+  setSync('Cargando datos…');
+  
+  const { data, error } = await supabase.from('app_items').select('*');
+  if (!error && data && data.length > 0) {
+    state.players = data.filter(item => item.kind === 'players').map(item => item.data);
+    state.games = data.filter(item => item.kind === 'games').map(item => item.data);
+    state.matches = data.filter(item => item.kind === 'matches').map(item => item.data);
+  } else {
+    // Si es nuevo usuario, cargar juegos por defecto y guardarlos
+    state = defaultState();
+    save();
+  }
+  
+  setSync('☁ Sincronizado');
+  renderAll();
+  showView('global');
+}
+
+async function cerrarSesion() {
+  await supabase.auth.signOut();
+  location.reload();
+}
+
+function setAuthMode(m){
+  authMode = m;
+  $('tabLogin').classList.toggle('off', m !== 'login'); 
+  $('tabReg').classList.toggle('off', m !== 'register');$('regRow').style.display = m === 'register' ? 'block' : 'none';
+  $('authBtn').textContent = m === 'register' ? 'Crear cuenta' : 'Ingresar';$('authMsg').textContent = '';
+}
+
+/* ===== 4. CÁLCULOS Y JUEGO ===== */
 function computeGame(gameId){
   const g = game(gameId);
   const ms = state.matches.filter(m => m.game === gameId).sort((a,b) => a.ts - b.ts);
@@ -367,7 +520,6 @@ function computeGame(gameId){
   const rows = Object.values(map);
   rows.forEach(r => r.pct = r.pj ? r.pg / r.pj * 100 : 0);
   rows.sort((a,b) => b.pts - a.pts || b.pct - a.pct || nameOf(a.id).localeCompare(nameOf(b.id)));
-  // Líderes: por métrica, quien(es) tenga(n) el total más alto (> 0)
   const leaders = {};
   (g ? g.metrics : []).forEach(mt => {
     const max = Math.max(0, ...rows.map(r => r.met[mt.id] || 0));
@@ -380,20 +532,18 @@ function badgesFor(pid, g, leaders){
     ? `<span class="badge" title="${esc('Líder en ' + mt.name + ' (' + leaders[mt.id].max + ')')}">${ICONS[i % ICONS.length]}</span>` : '').join('');
 }
 
-/* ===== 4. ACCIONES ===== */
 async function addPlayer(){
-  const msg = $('msgPlayer'), name = $('pName').value.trim();
+  const msg = $('msgPlayer'), name =$('pName').value.trim();
   if(!name) return flash(msg,'Escribe un nombre.',true);
   if(state.players.some(p => p.name.toLowerCase() === name.toLowerCase())) return flash(msg,'Ese jugador ya existe.',true);
-  let photo = ''; try{ photo = await pickImage($('pFile'), $('pUrl'), 400, 400); }catch(e){ return flash(msg,'No se pudo leer la imagen.',true); }
+  let photo = ''; try{ photo = await pickImage($('pFile'),$('pUrl'), 400, 400); }catch(e){ return flash(msg,'No se pudo leer la imagen.',true); }
   const skills = [...document.querySelectorAll('#newSkills .srow')].map(r => ({id:uid(), name:r.querySelector('.sn1').value.trim(), value:r.querySelector('.sv1').value.trim()})).filter(x => x.name && x.value);
   const song = $('pSong').value.trim();
-  if(song && !ytId(song)) return flash(msg,'El enlace de YouTube no es válido.',true);
   state.players.push({id:uid(), name, photo, skills, desc:$('pDesc').value.trim(), favs:$('pFavs').value.trim(), prime:$('pPrime').value, discord:$('pDiscord').value.trim(), socials:$('pSocials').value.trim(), song});
-  ['pName','pUrl','pFile','pFavs','pDesc','pDiscord','pSocials','pSong','pPrime'].forEach(i => $(i).value = ''); $('newSkills').innerHTML = ''; addSkillRow();
+  ['pName','pUrl','pFile','pFavs','pDesc','pDiscord','pSocials','pSong','pPrime'].forEach(i => $(i).value = '');$('newSkills').innerHTML = ''; addSkillRow();
   save(); renderAll(); flash(msg, name + ' agregado.');
 }
-// Estadística personalizada: atributo único de broma solo para ese jugador
+
 function addCustomStat(pid, name, value){
   const p = player(pid); name = name.trim(); value = String(value).trim();
   if(!p || !name || !value) return;
@@ -402,16 +552,17 @@ function addCustomStat(pid, name, value){
   save(); renderGallery(); renderAnalysis();
 }
 function deleteCustomStat(pid, sid){ const p = player(pid); p.skills = p.skills.filter(c => c.id !== sid); save(); renderGallery(); renderAnalysis(); }
+
 async function addGame(){
-  const msg = $('msgGame'), name = $('gName').value.trim();
+  const msg = $('msgGame'), name =$('gName').value.trim();
   if(!name) return flash(msg,'Escribe el nombre del juego.',true);
   if(state.games.some(g => g.name.toLowerCase() === name.toLowerCase())) return flash(msg,'Ese juego ya existe.',true);
-  let cover = ''; try{ cover = await pickImage($('gFile'), $('gUrl'), 900, 400); }catch(e){ return flash(msg,'No se pudo leer la imagen.',true); }
+  let cover = ''; try{ cover = await pickImage($('gFile'),$('gUrl'), 900, 400); }catch(e){ return flash(msg,'No se pudo leer la imagen.',true); }
   const names = [...document.querySelectorAll('#newMetrics input')].map(i => i.value.trim()).filter(Boolean);
   const metrics = [...new Set(names)].map(n => ({id:uid(), name:n}));
   state.games.push({id:uid(), name, cover, metrics});
-  ['gName','gUrl','gFile'].forEach(i => $(i).value = ''); $('newMetrics').innerHTML = ''; addMetricRow();
-  save(); renderAll(); flash(msg, name + ' creado con ' + metrics.length + ' métrica(s).');
+  ['gName','gUrl','gFile'].forEach(i => $(i).value = '');$('newMetrics').innerHTML = ''; addMetricRow();
+  save(); renderAll(); flash(msg, name + ' creado.');
 }
 function addMetricRow(){
   const d = document.createElement('div'); d.className = 'mrow2';
@@ -424,19 +575,51 @@ function addMetricToGame(gid){
   if(!n || g.metrics.some(m => m.name.toLowerCase() === n.toLowerCase())) return;
   g.metrics.push({id:uid(), name:n}); save(); renderAll();
 }
-function saveMatch(){
-  const msg = $('msgMatch'), p1 = $('p1').value, p2 = $('p2').value, g = game($('mGame').value);
-  if(state.players.length < 2) return flash(msg,'Agrega al menos 2 jugadores en la Galería.',true);
+
+async function saveMatch(){
+  const msg = $('msgMatch'), p1 =$('p1').value, p2 = $('p2').value, g = game($('mGame').value);
+  if(state.players.length < 2) return flash(msg,'Agrega al menos 2 jugadores.',true);
   if(p1 === p2) return flash(msg,'Elige dos jugadores distintos.',true);
   const m = {p1:{}, p2:{}};
   document.querySelectorAll('#metricInputs input').forEach(i => { m[i.dataset.side][i.dataset.m] = Math.max(0, parseInt(i.value) || 0); });
-  state.matches.push({id:uid(), game:g.id, p1, p2, result:document.querySelector('input[name=res]:checked').value, ts:Date.now(), m, notes:$('mNotes').value.trim()});
+  
+  const newMatch = {id:uid(), game:g.id, p1, p2, result:document.querySelector('input[name=res]:checked').value, ts:Date.now(), m, notes:$('mNotes').value.trim()};
+  state.matches.push(newMatch);
+  
+  // Guardar partida específica en Supabase
+  const user = (await supabase.auth.getUser()).data.user;
+  if(user) await supabase.from('app_items').upsert({ user_id: user.id, kind: 'matches', id: newMatch.id, data: newMatch });
+
   $('rGame').value = g.id; $('mNotes').value = ''; document.querySelectorAll('#metricInputs input').forEach(i => i.value = '');
-  save(); renderAll(); flash(msg,'Partida guardada.');
+  renderAll(); flash(msg,'Partida guardada.');
 }
-function deleteMatch(id){ state.matches = state.matches.filter(m => m.id !== id); save(); renderAll(); }
-function deletePlayer(id){ if(confirm('¿Eliminar jugador? También se borrarán sus partidas.')){ state.players = state.players.filter(p => p.id !== id); state.matches = state.matches.filter(m => m.p1 !== id && m.p2 !== id); save(); renderAll(); } }
-function deleteGame(id){ if(confirm('¿Eliminar juego y sus partidas?')){ state.games = state.games.filter(g => g.id !== id); state.matches = state.matches.filter(m => m.game !== id); state.players.forEach(p => { if(p.prime === id) p.prime = ''; }); save(); renderAll(); } }
+
+async function deleteMatch(id){ 
+  state.matches = state.matches.filter(m => m.id !== id); 
+  const user = (await supabase.auth.getUser()).data.user;
+  if(user) await supabase.from('app_items').delete().match({ user_id: user.id, kind: 'matches', id: id });
+  renderAll(); 
+}
+
+async function deletePlayer(id){ 
+  if(confirm('¿Eliminar jugador?')){ 
+    state.players = state.players.filter(p => p.id !== id); 
+    state.matches = state.matches.filter(m => m.p1 !== id && m.p2 !== id); 
+    const user = (await supabase.auth.getUser()).data.user;
+    if(user) await supabase.from('app_items').delete().match({ user_id: user.id, kind: 'players', id: id });
+    renderAll(); 
+  } 
+}
+
+async function deleteGame(id){ 
+  if(confirm('¿Eliminar juego?')){ 
+    state.games = state.games.filter(g => g.id !== id); 
+    state.matches = state.matches.filter(m => m.game !== id); 
+    const user = (await supabase.auth.getUser()).data.user;
+    if(user) await supabase.from('app_items').delete().match({ user_id: user.id, kind: 'games', id: id });
+    renderAll(); 
+  } 
+}
 
 /* ===== 5. RENDER ===== */
 function renderSelects(){
@@ -446,36 +629,27 @@ function renderSelects(){
   const kp = $('pPrime').value; $('pPrime').innerHTML = '<option value="">— Ninguno —</option>' + gOpts; if(game(kp)) $('pPrime').value = kp;
   const pOpts = state.players.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   ['p1','p2','aPlayer'].forEach(i => $(i).innerHTML = pOpts);
-  if(game(k.r)) $('rGame').value = k.r; if(game(k.m)) $('mGame').value = k.m;
-  if(player(k.ap)) $('aPlayer').value = k.ap; if(player(k.p1)) $('p1').value = k.p1;
-  if(player(k.p2)) $('p2').value = k.p2; else if(state.players[1]) $('p2').value = state.players[1].id;
+  if(game(k.r)) $('rGame').value = k.r; if(game(k.m))$('mGame').value = k.m;
+  if(player(k.ap)) $('aPlayer').value = k.ap; if(player(k.p1))$('p1').value = k.p1;
+  if(player(k.p2)) $('p2').value = k.p2; else if(state.players[1])$('p2').value = state.players[1].id;
 }
 function renderTable(){
-  const g = game($('rGame').value);
-  $('banner').setAttribute('style', g ? bg(g.cover) : '');
+  const g = game($('rGame').value);$('banner').setAttribute('style', g ? bg(g.cover) : '');
   $('bannerTitle').textContent = g ? g.name : 'Sin juegos';
   $('legend').innerHTML = '';
   if(!g){ $('tbody').innerHTML = ''; return; }
   const {rows, leaders} = computeGame(g.id), medals = ['🥇','🥈','🥉'];
   if(!rows.length){ $('tbody').innerHTML = `<tr><td colspan="9" class="empty">Nadie ha jugado ${esc(g.name)} todavía.</td></tr>`; return; }
-  $('tbody').innerHTML = rows.map((r,i) => `<tr data-id="${r.id}" tabindex="0" style="animation-delay:${i*60}ms">
+  $('tbody').innerHTML = rows.map((r,i) => `<tr data-id="${r.id}" tabindex="0">
     <td class="pos">${medals[i] || i+1}</td><td>${avatar(player(r.id))}</td>
     <td class="name">${esc(nameOf(r.id))}${badgesFor(r.id, g, leaders)}</td>
     <td>${r.pj}</td><td class="w">${r.pg}</td><td>${r.pe}</td><td class="l">${r.pp}</td>
     <td>${r.pct.toFixed(0)}%</td><td class="pts">${r.pts}</td></tr>`).join('');
-  $('legend').innerHTML = g.metrics.map((mt,i) => leaders[mt.id].ids.length
-    ? `<span class="chip">${ICONS[i % ICONS.length]} ${esc(mt.name)}: ${leaders[mt.id].ids.map(x => esc(nameOf(x))).join(' y ')} (${leaders[mt.id].max})</span>` : '').join('');
 }
 function renderMetricInputs(){
-  const keep = {};
-  document.querySelectorAll('#metricInputs input').forEach(i => { if(i.value !== '') keep[i.dataset.side + '|' + i.dataset.m] = i.value; });
-  buildMetricInputs();
-  document.querySelectorAll('#metricInputs input').forEach(i => { const v = keep[i.dataset.side + '|' + i.dataset.m]; if(v !== undefined) i.value = v; });
-}
-function buildMetricInputs(){
   const g = game($('mGame').value);
-  if(!g || !g.metrics.length){ $('metricInputs').innerHTML = '<p style="color:var(--muted);font-size:.8rem;margin-top:12px">Este juego no tiene métricas específicas.</p>'; return; }
-  $('metricInputs').innerHTML = `<div class="mrow head"><span>Métricas de la partida</span><span>${esc(nameOf($('p1').value))}</span><span>${esc(nameOf($('p2').value))}</span></div>` +
+  if(!g || !g.metrics.length){ $('metricInputs').innerHTML = '<p style="color:var(--muted);font-size:.8rem;margin-top:12px">Este juego no tiene métricas.</p>'; return; }
+  $('metricInputs').innerHTML = `<div class="mrow head"><span>Métricas</span><span>${esc(nameOf($('p1').value))}</span><span>${esc(nameOf($('p2').value))}</span></div>` +
     g.metrics.map(mt => `<div class="mrow"><span>${esc(mt.name)}</span>
       <input type="number" min="0" placeholder="0" data-side="p1" data-m="${mt.id}">
       <input type="number" min="0" placeholder="0" data-side="p2" data-m="${mt.id}"></div>`).join('');
@@ -485,25 +659,23 @@ function renderHistory(){
   $('hist').innerHTML = ms.length ? ms.map(m => {
     const a = esc(nameOf(m.p1)), b = esc(nameOf(m.p2));
     const t = m.result === 'draw' ? `${a} empató con ${b}` : m.result === 'p1' ? `<b>${a}</b> venció a ${b}` : `<b>${b}</b> venció a ${a}`;
-    return `<div><span>${t}<br><small>${esc((game(m.game)||{name:'?'}).name)}${m.notes ? ' · “' + esc(m.notes) + '”' : ''}</small></span><button title="Eliminar" data-del="${m.id}">×</button></div>`;
+    return `<div><span>${t}<br><small>${esc((game(m.game)||{name:'?'}).name)}</small></span><button title="Eliminar" data-del="${m.id}">×</button></div>`;
   }).join('') : '<div class="empty">Aún no hay partidas.</div>';
 }
-// Abreviatura de 3 letras de una habilidad ("Nivel de excusas" -> EXC)
+
 const STOP = ['de','del','la','el','los','las','y','en','por','al','a','un','una','nivel'];
 function abbr(name){
   const words = name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().split(/\s+/).filter(Boolean);
   const keep = words.filter(w => !STOP.includes(w.toLowerCase()));
   return ((keep[0] || words[0] || '???').replace(/[^A-Z0-9]/g,'') || '???').slice(0,3);
 }
-// Rating general: promedio (0-99) de las habilidades numéricas del jugador
 function rating(p){
   const n = (p.skills || []).map(c => parseFloat(String(c.value).replace(',','.'))).filter(v => !isNaN(v)).map(v => Math.max(0, Math.min(99, v)));
   return n.length ? Math.round(n.reduce((a,b) => a + b, 0) / n.length) : '--';
 }
-// Carta en forma de escudo; muestra hasta 6 habilidades repartidas en 2 columnas
 function futCard(p){
   const sk = (p.skills || []).slice(0,6), half = Math.ceil(sk.length / 2);
-  const row = c => `<div class="f-s" title="${esc(c.name)}"><b>${esc(c.value)}</b><span>${abbr(c.name)}</span></div>`;
+  const row = c => `<div class="f-s"><b>${esc(c.value)}</b><span>${abbr(c.name)}</span></div>`;
   return `<div class="fut-wrap"><div class="fut">
     <div class="f-rate"><b>${rating(p)}</b><i>🎮</i></div>
     <div class="f-photo" style="${esc(bg(p.photo))}">${p.photo ? '' : initials(p.name)}</div>
@@ -512,28 +684,25 @@ function futCard(p){
   </div></div>`;
 }
 function skillChips(p){
-  return (p.skills || []).map(c => `<span class="cs">${esc(c.name)}: <b>${esc(c.value)}</b><button title="Quitar" data-act="delstat" data-pid="${p.id}" data-sid="${c.id}">×</button></span>`).join('')
-    || '<span style="color:var(--muted);font-size:.8rem">Sin habilidades todavía.</span>';
+  return (p.skills || []).map(c => `<span class="cs">${esc(c.name)}: <b>${esc(c.value)}</b><button data-act="delstat" data-pid="${p.id}" data-sid="${c.id}">×</button></span>`).join('')
+    || '<span style="color:var(--muted);font-size:.8rem">Sin habilidades.</span>';
 }
-// Galería: una carta FUT por jugador + panel para gestionar sus habilidades
 function renderGallery(){
-  if(!state.players.length){ $('gallery').innerHTML = '<div class="empty" style="grid-column:1/-1">Aún no hay jugadores. Abre "Nuevo jugador" para agregar el primero.</div>'; return; }
+  if(!state.players.length){ $('gallery').innerHTML = '<div class="empty" style="grid-column:1/-1">Aún no hay jugadores.</div>'; return; }
   $('gallery').innerHTML = state.players.map((p,i) => `<article class="gcell" style="--i:${i}">
       ${futCard(p)}
       <div class="gm"><div class="cust">${skillChips(p)}</div>
-        ${(p.skills || []).length > 6 ? '<small style="color:var(--muted);font-size:.72rem">La carta muestra las primeras 6 habilidades.</small>' : ''}
-        <div class="cform"><input class="cn" placeholder="Ej: Controles rotos" maxlength="28"><input class="cv" placeholder="0-99" maxlength="10">
-          <button data-act="savestat" data-pid="${p.id}">Guardar habilidad</button></div>
-        <div class="pact"><button data-act="addstat">+ Agregar Nueva Habilidad/Estadística</button></div>
-        <div class="pact"><button class="ghost" data-act="analyze" data-pid="${p.id}">Ver análisis</button><button class="ghost" data-act="delp" data-pid="${p.id}">Eliminar</button></div>
+        <div class="cform"><input class="cn" placeholder="Habilidad" maxlength="28"><input class="cv" placeholder="0-99" maxlength="10">
+          <button data-act="savestat" data-pid="${p.id}">Guardar</button></div>
+        <div class="pact"><button data-act="addstat">+ Agregar Habilidad</button></div>
+        <div class="pact"><button class="ghost" data-act="analyze" data-pid="${p.id}">Análisis</button><button class="ghost" data-act="delp" data-pid="${p.id}">Eliminar</button></div>
       </div></article>`).join('');
 }
 function renderGames(){
   $('gameList').innerHTML = state.games.map(g => `<div class="item"><div class="av" style="border-radius:10px;${esc(bg(g.cover))}">${g.cover ? '' : '🎮'}</div>
     <div style="flex:1"><b>${esc(g.name)}</b><small>Métricas: ${g.metrics.map(m => esc(m.name)).join(', ') || 'ninguna'}</small></div>
-    <button class="ghost" data-addm="${g.id}">+ Métrica</button><button class="ghost" data-delg="${g.id}">Eliminar juego</button></div>`).join('') || '<div class="empty">Sin juegos.</div>';
+    <button class="ghost" data-addm="${g.id}">+ Métrica</button><button class="ghost" data-delg="${g.id}">Eliminar</button></div>`).join('') || '<div class="empty">Sin juegos.</div>';
 }
-// Ranking Global: suma los puntos de cada jugador en TODOS los juegos
 function renderGlobal(){
   const map = {};
   state.games.forEach(g => computeGame(g.id).rows.forEach(r => {
@@ -543,197 +712,110 @@ function renderGlobal(){
   const rows = Object.values(map).map(r => ({...r, pct: r.pj ? r.pg / r.pj * 100 : 0}))
     .sort((a,b) => b.pts - a.pts || b.pct - a.pct || nameOf(a.id).localeCompare(nameOf(b.id)));
   const medals = ['🥇','🥈','🥉'];
-  $('gbody').innerHTML = rows.length ? rows.map((r,i) => `<tr data-id="${r.id}" tabindex="0" style="animation-delay:${i*60}ms">
+  $('gbody').innerHTML = rows.length ? rows.map((r,i) => `<tr data-id="${r.id}" tabindex="0">
     <td class="pos">${medals[i] || i+1}</td><td>${avatar(player(r.id))}</td><td class="name">${esc(nameOf(r.id))}</td>
     <td>${r.games}</td><td>${r.pj}</td><td class="w">${r.pg}</td><td>${r.pe}</td><td class="l">${r.pp}</td>
     <td>${r.pct.toFixed(0)}%</td><td class="pts">${r.pts}</td></tr>`).join('')
-    : '<tr><td colspan="10" class="empty">Aún no hay partidas. Registra la primera para ver el ranking global.</td></tr>';
+    : '<tr><td colspan="10" class="empty">Aún no hay partidas.</td></tr>';
 }
-let anaMode = 'general', anaGame = '';   // modo de vista del Análisis y juego elegido
+
+let anaMode = 'general', anaGame = ''; 
 const kpi = (v, label) => `<div class="kpi"><b>${v}</b><small>${label}</small></div>`;
-// Análisis Avanzado: carta + perfil (siempre visibles) y dos modos: General / Por juego
+
 function renderAnalysis(){
   const p = player($('aPlayer').value);
-  if(!p){ $('analysis').innerHTML = '<div class="empty">Crea jugadores en la Galería para ver su análisis.</div>'; return; }
+  if(!p){ $('analysis').innerHTML = '<div class="empty">Crea jugadores.</div>'; return; }
   const prime = game(p.prime);
-  const info = [['🎮 Juego Prime', prime ? prime.name : ''], ['⭐ Juegos favoritos', p.favs], ['💬 Discord', p.discord], ['🌐 Redes', p.socials], ['📝 Descripción', p.desc]]
-    .filter(x => x[1]).map(x => `<div class="irow"><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join('')
-    || '<div class="empty" style="padding:10px">Este jugador no tiene datos de perfil.</div>';
+  const info = [['🎮 Prime', prime ? prime.name : ''], ['⭐ Favoritos', p.favs], ['💬 Discord', p.discord], ['🌐 Redes', p.socials], ['📝 Descripción', p.desc]]
+    .filter(x => x[1]).map(x => `<div class="irow"><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join('') || '';
 
-  // Juegos en los que ha participado, con sus estadísticas y líderes de métricas
   const list = state.games.map(g => { const {rows, leaders} = computeGame(g.id), r = rows.find(x => x.id === p.id); return r ? {g, r, leaders} : null; }).filter(Boolean);
   let body;
   if(!list.length){
-    body = '<div class="empty">Este jugador todavía no ha jugado partidas.</div>';
+    body = '<div class="empty">Sin partidas registradas.</div>';
   } else if(anaMode === 'general'){
-    // ---- ANÁLISIS GENERAL: todo el recorrido consolidado ----
-    const t = list.reduce((a,x) => ({pj:a.pj + x.r.pj, pg:a.pg + x.r.pg, pe:a.pe + x.r.pe, pp:a.pp + x.r.pp, pts:a.pts + x.r.pts,
-      streak:Math.max(a.streak, x.r.streak), titles:a.titles + x.g.metrics.filter(mt => x.leaders[mt.id].ids.includes(p.id)).length}), {pj:0,pg:0,pe:0,pp:0,pts:0,streak:0,titles:0});
-    const agg = {};   // métricas con el mismo nombre en distintos juegos se suman
-    list.forEach(x => x.g.metrics.forEach(mt => {
-      const k = mt.name.trim().toLowerCase(), a = agg[k] || (agg[k] = {name:mt.name, total:0, parts:[]}), v = x.r.met[mt.id] || 0;
-      a.total += v; a.parts.push(esc(x.g.name) + ': ' + v);
-    }));
-    const mets = Object.values(agg).map(a => `<div class="metric"><div>${esc(a.name)}<br><small style="color:var(--muted)">${a.parts.join(' · ')}</small></div><span class="num">${a.total}</span></div>`).join('') || '<div class="empty">Sus juegos no tienen métricas.</div>';
-    const per = list.map(x => `<div class="metric"><div>${esc(x.g.name)}</div><span style="font-size:.85rem">${x.r.pj} PJ · <b style="color:var(--gold)">${x.r.pts} pts</b> · ${x.r.pct.toFixed(0)}%</span></div>`).join('');
-    body = `<div class="kpis">${kpi(t.pts, 'Puntos totales')}${kpi((t.pj ? t.pg / t.pj * 100 : 0).toFixed(0) + '%', '% victoria global')}${kpi(t.pj, 'Partidas')}
-      ${kpi(t.pg + ' / ' + t.pe + ' / ' + t.pp, 'G / E / P')}${kpi(list.length, 'Juegos')}${kpi(t.streak, 'Mejor racha')}${kpi(t.titles, 'Títulos 🏆')}</div>
-      <h3 class="sub">Métricas acumuladas (todos los juegos)</h3>${mets}<h3 class="sub">Resumen por juego</h3>${per}`;
+    const t = list.reduce((a,x) => ({pj:a.pj + x.r.pj, pg:a.pg + x.r.pg, pe:a.pe + x.r.pe, pp:a.pp + x.r.pp, pts:a.pts + x.r.pts, streak:Math.max(a.streak, x.r.streak), titles:a.titles + x.g.metrics.filter(mt => x.leaders[mt.id].ids.includes(p.id)).length}), {pj:0,pg:0,pe:0,pp:0,pts:0,streak:0,titles:0});
+    body = `<div class="kpis">${kpi(t.pts, 'Puntos')}${kpi((t.pj ? t.pg / t.pj * 100 : 0).toFixed(0) + '%', '% victoria')}${kpi(t.pj, 'Partidas')}${kpi(t.streak, 'Mejor racha')}${kpi(t.titles, 'Títulos 🏆')}</div>`;
   } else {
-    // ---- ANÁLISIS POR JUEGO: solo el juego elegido ----
     if(!list.some(x => x.g.id === anaGame)) anaGame = list[0].g.id;
     const x = list.find(y => y.g.id === anaGame), r = x.r;
-    const mets = x.g.metrics.map((mt,i) => {
-      const L = x.leaders[mt.id], lead = L.ids.includes(p.id);
-      return `<div class="metric ${lead ? 'lead' : ''}"><div>${ICONS[i % ICONS.length]} ${esc(mt.name)}<br><small style="color:var(--muted)">${lead ? (L.ids.length > 1 ? 'Líder compartido' : 'Líder absoluto') : L.ids.length ? 'Líder: ' + L.ids.map(id => esc(nameOf(id))).join(', ') + ' (' + L.max + ')' : 'Sin datos aún'}</small></div>
-        <span class="num">${r.met[mt.id] || 0}</span></div>`;
-    }).join('') || '<div class="empty">Este juego no tiene métricas.</div>';
-    const opps = Object.entries(r.opp || {}).map(([oid,o]) => `<div class="metric"><div>${esc(nameOf(oid))}</div><span style="font-size:.85rem"><b class="w">${o.g}G</b> · ${o.e}E · <b class="l">${o.p}P</b></span></div>`).join('');
-    body = `<label for="anaGameSel">Juego</label><select id="anaGameSel">${list.map(y => `<option value="${y.g.id}" ${y.g.id === anaGame ? 'selected' : ''}>${esc(y.g.name)}</option>`).join('')}</select>
-      <div class="kpis">${kpi(r.pts, 'Puntos')}${kpi(r.pct.toFixed(0) + '%', '% victoria')}${kpi(r.pj, 'Partidas')}${kpi(r.pg, 'Ganadas')}${kpi(r.pe, 'Empatadas')}${kpi(r.pp, 'Perdidas')}${kpi(r.streak, 'Mejor racha')}</div>
-      <h3 class="sub">Métricas de ${esc(x.g.name)}</h3>${mets}<h3 class="sub">Rivales enfrentados</h3>${opps || '<div class="empty">Sin rivales registrados.</div>'}`;
+    body = `<label>Juego</label><select id="anaGameSel">${list.map(y => `<option value="${y.g.id}" ${y.g.id === anaGame ? 'selected' : ''}>${esc(y.g.name)}</option>`).join('')}</select>
+      <div class="kpis">${kpi(r.pts, 'Puntos')}${kpi(r.pct.toFixed(0) + '%', '% vic')}${kpi(r.pj, 'PJ')}</div>`;
   }
   $('analysis').innerHTML = `<div class="afut">${futCard(p)}<div>${info}
-    <div class="mtabs"><button data-mode="general" class="${anaMode === 'general' ? '' : 'off'}">Análisis General</button><button data-mode="juego" class="${anaMode === 'juego' ? '' : 'off'}">Análisis por Juego</button></div>${body}</div></div>`;
+    <div class="mtabs"><button data-mode="general" class="${anaMode === 'general' ? '' : 'off'}">General</button><button data-mode="juego" class="${anaMode === 'juego' ? '' : 'off'}">Por Juego</button></div>${body}</div></div>`;
 }
+
 function renderAll(){ renderSelects(); renderGlobal(); renderTable(); renderMetricInputs(); renderHistory(); renderGallery(); renderGames(); renderAnalysis(); }
 
-/* ===== 6. NAVEGACIÓN (SPA) ===== */
+/* ===== 6. NAVEGACIÓN Y EVENTOS ===== */
 function showView(name){
-  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'v-' + name)); // la clase active dispara el fade-in
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'v-' + name));
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   window.scrollTo(0,0);
-  if(name === 'analisis') loadSong(true); else stopSong();   // la música solo suena en Análisis
 }
 function flash(el, text, err){ el.textContent = text; el.className = 'msg' + (err ? ' err' : ''); clearTimeout(el._t); el._t = setTimeout(() => el.textContent = '', 3500); }
 
-/* ===== 7. EVENTOS E INICIO ===== */
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => showView(b.dataset.view));
-// Fila dinámica para escribir una habilidad libre (nombre + valor) al crear el perfil
+
 function addSkillRow(){
   const d = document.createElement('div'); d.className = 'srow';
-  d.innerHTML = '<input class="sn1" placeholder="Habilidad (ej. Nivel de excusas)" maxlength="28"><input class="sv1" placeholder="Valor" maxlength="10"><button class="ghost" type="button" title="Quitar">×</button>';
+  d.innerHTML = '<input class="sn1" placeholder="Habilidad" maxlength="28"><input class="sv1" placeholder="0-99" maxlength="10"><button class="ghost" type="button">×</button>';
   d.querySelector('button').onclick = () => d.remove();
   $('newSkills').appendChild(d);
 }
 $('addSkillRow').onclick = addSkillRow;
-$('addPlayer').onclick = addPlayer; $('addGame').onclick = addGame; $('saveMatch').onclick = saveMatch; $('addMetricRow').onclick = addMetricRow;
+$('addPlayer').onclick = addPlayer; 
+$('addGame').onclick = addGame; 
+$('saveMatch').onclick = saveMatch; 
+$('addMetricRow').onclick = addMetricRow;
 $('rGame').onchange = renderTable;
-// Agregar una estadística nueva al juego desde "Registrar Partida" (queda guardada en el juego)
-function addMetricHere(){
-  const g = game($('mGame').value), n = $('newMetName').value.trim(), msg = $('msgMatch');
-  if(!g) return;
-  if(!n) return flash(msg,'Escribe el nombre de la estadística.',true);
-  if(g.metrics.some(m => m.name.toLowerCase() === n.toLowerCase())) return flash(msg,'Esa estadística ya existe.',true);
-  g.metrics.push({id:uid(), name:n}); $('newMetName').value = '';
-  save(); renderAll(); flash(msg, '"' + n + '" agregada a ' + g.name + '. Ya puedes usarla en esta partida.');
-}
-$('toggleMet').onclick = () => { const r = $('newMetRow'); r.style.display = r.style.display === 'none' ? 'flex' : 'none'; $('newMetName').focus(); };
-$('confirmMet').onclick = addMetricHere;
-$('newMetName').addEventListener('keydown', e => { if(e.key === 'Enter') addMetricHere(); });
-['mGame','p1','p2'].forEach(i => $(i).onchange = renderMetricInputs);
-$('aPlayer').onchange = () => { renderAnalysis(); loadSong(true); };
-$('tbody').addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if(tr){ $('aPlayer').value = tr.dataset.id; renderAnalysis(); showView('analisis'); } });
-$('hist').addEventListener('click', e => { const b = e.target.closest('[data-del]'); if(b && confirm('¿Eliminar esta partida?')) deleteMatch(b.dataset.del); });
-$('gameList').addEventListener('click', e => {
+
+$('toggleMet').onclick = () => { const r = $('newMetRow'); r.style.display = r.style.display === 'none' ? 'flex' : 'none'; };$('confirmMet').onclick = () => {
+  const g = game($('mGame').value), n =$('newMetName').value.trim();
+  if(g && n) { g.metrics.push({id:uid(), name:n}); $('newMetName').value = ''; save(); renderAll(); }
+};
+
+['mGame','p1','p2'].forEach(i => $(i).onchange = renderMetricInputs);$('aPlayer').onchange = renderAnalysis;
+
+$('tbody').addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if(tr){$('aPlayer').value = tr.dataset.id; renderAnalysis(); showView('analisis'); } });
+$('hist').addEventListener('click', e => { const b = e.target.closest('[data-del]'); if(b) deleteMatch(b.dataset.del); });$('gameList').addEventListener('click', e => {
   const a = e.target.closest('[data-addm]'), d = e.target.closest('[data-delg]');
   if(a) addMetricToGame(a.dataset.addm); if(d) deleteGame(d.dataset.delg);
 });
-// Acciones dentro de las tarjetas de la galería (delegación de eventos)
+
 $('gallery').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if(!b) return;
   const card = b.closest('.gcell'), act = b.dataset.act, pid = b.dataset.pid;
-  if(act === 'addstat'){ card.querySelector('.cform').classList.toggle('open'); card.querySelector('.cn').focus(); }
+  if(act === 'addstat'){ card.querySelector('.cform').classList.toggle('open'); }
   else if(act === 'savestat') addCustomStat(pid, card.querySelector('.cn').value, card.querySelector('.cv').value);
   else if(act === 'delstat') deleteCustomStat(pid, b.dataset.sid);
   else if(act === 'delp') deletePlayer(pid);
   else if(act === 'analyze'){ $('aPlayer').value = pid; renderAnalysis(); showView('analisis'); }
 });
-$('gbody').addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if(tr){ $('aPlayer').value = tr.dataset.id; renderAnalysis(); showView('analisis'); } });
 
-/* ===== Reproductor de YouTube (IFrame API): canción de entrada del jugador ===== */
-// Extrae el ID de 11 caracteres desde cualquier formato de enlace de YouTube
-function ytId(url){
-  url = (url || '').trim();
-  if(!url) return '';
-  if(/^[\w-]{11}$/.test(url)) return url;                       // ya es un ID
-  try{
-    const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
-    const host = u.hostname.replace(/^(www|m|music)\./, '');
-    let id = '';
-    if(host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
-    else if(host === 'youtube.com' || host === 'youtube-nocookie.com'){
-      id = u.searchParams.get('v') || ((u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]{11})/) || [])[1] || '');
-    }
-    return /^[\w-]{11}$/.test(id) ? id : '';
-  }catch(e){ return ''; }
-}
+$('analysis').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if(b){ anaMode = b.dataset.mode; renderAnalysis(); } });$('analysis').addEventListener('change', e => { if(e.target.id === 'anaGameSel'){ anaGame = e.target.value; renderAnalysis(); } });
 
-let yt = null, ytApiReady = false, ytPlayerReady = false, want = null;   // want = {id, autoplay, name}
-const setInfo = t => { $('songInfo').textContent = t; };
-const volume = () => parseInt($('vol').value) || 0;
+// Conexión de los botones de Autenticación
+$('tabLogin').onclick = () => setAuthMode('login'); 
+$('tabReg').onclick = () => setAuthMode('register');$('authBtn').onclick = manejarAuth;
+$('logoutBtn').onclick = cerrarSesion;
 
-function loadYTApi(){                           // carga https://www.youtube.com/iframe_api una sola vez
-  if(document.getElementById('ytApi')) return;
-  const t = document.createElement('script'); t.id = 'ytApi'; t.src = 'https://www.youtube.com/iframe_api';
-  t.onerror = () => setInfo('No se pudo cargar YouTube. Revisa tu conexión a internet.');
-  document.head.appendChild(t);
-}
-window.onYouTubeIframeAPIReady = () => { ytApiReady = true; applyWant(); };   // callback global que exige la API
+['aUser','aPass','aPass2'].forEach(i => $(i).addEventListener('keydown', e => { if(e.key === 'Enter') manejarAuth(); }));
 
-// Lleva el reproductor al estado deseado (crea el player la primera vez)
-function applyWant(){
-  if(!want) return;
-  if(!ytApiReady){ loadYTApi(); return; }
-  if(!yt){
-    const vars = {controls:0, disablekb:1, playsinline:1, rel:0};
-    if(/^https?:/.test(location.protocol)) vars.origin = location.origin;
-    yt = new YT.Player('ytHost', {width:'1', height:'1', playerVars:vars, events:{
-      onReady: e => { ytPlayerReady = true; e.target.setVolume(volume()); applyWant(); },
-      onStateChange: onYtState,
-      onError: () => setInfo(location.protocol === 'file:'
-        ? 'YouTube rechazó el video. Abre la app desde un servidor local o un hosting (no como archivo) y revisa que el video permita incrustarse.'
-        : 'No se pudo reproducir este video (puede no permitir incrustarse).')
-    }});
-    return;
+// Arranque inicial verificando sesión activa en Supabase
+async function boot(){
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) {
+    iniciarSesionExitosa();
+  } else {
+    document.body.classList.add('locked');
   }
-  if(!ytPlayerReady) return;                    // se aplicará en onReady
-  yt.setVolume(volume());
-  if(want.autoplay) yt.loadVideoById(want.id); else yt.cueVideoById(want.id);
-  setInfo('♪ Canción de entrada de ' + want.name);
-  if(want.autoplay) setTimeout(() => {          // si el navegador bloqueó el autoplay, avisar
-    if(want && yt && ytPlayerReady && ![1,3].includes(yt.getPlayerState())) setInfo('Pulsa ▶ para reproducir (el navegador bloqueó el autoplay).');
-  }, 2500);
 }
-function onYtState(e){
-  const S = YT.PlayerState;
-  if(e.data === S.PLAYING) $('playBtn').textContent = '⏸';
-  else if(e.data === S.PAUSED || e.data === S.CUED) $('playBtn').textContent = '▶';
-  else if(e.data === S.ENDED){ $('playBtn').textContent = '▶'; yt.seekTo(0); yt.playVideo(); }   // repetir en bucle
-}
-// Abre la canción del jugador seleccionado en Análisis
-function loadSong(autoplay){
-  const p = player($('aPlayer').value), id = p ? ytId(p.song) : '';
-  if(!id){ want = null; stopSong(); setInfo(p ? (p.song ? 'El enlace de YouTube de este jugador no es válido.' : 'Este jugador no tiene canción de entrada.') : ''); return; }
-  want = {id, autoplay, name:p.name};
-  setInfo('Cargando canción…');
-  applyWant();
-}
-function stopSong(){ if(yt && ytPlayerReady) yt.pauseVideo(); }
-// Controles propios -> API de YouTube
-$('playBtn').onclick = () => {
-  if(!yt || !ytPlayerReady || !want) return;
-  if(yt.getPlayerState() === YT.PlayerState.PLAYING) yt.pauseVideo(); else yt.playVideo();
-};
-$('vol').oninput = () => { $('volVal').textContent = volume() + '%'; if(yt && ytPlayerReady) yt.setVolume(volume()); };
-
-// Cambio de modo y de juego dentro del Análisis (no toca la música)
-$('analysis').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if(b){ anaMode = b.dataset.mode; renderAnalysis(); } });
-$('analysis').addEventListener('change', e => { if(e.target.id === 'anaGameSel'){ anaGame = e.target.value; renderAnalysis(); } });
 
 addMetricRow();
 addSkillRow();
-renderAll();
+boot();
 </script>
 </body>
 </html>
